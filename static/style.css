@@ -5,20 +5,31 @@
     font-family: 'Poppins', sans-serif;
 }
 
+
 body {
-    background-color: #f0f2f5;
+    background: white;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
     color: #333;
     line-height: 1.6;
 }
 
+
 .container {
-    max-width: 800px;
-    margin: 40px auto;
-    padding: 20px;
+    width: 100%;
+    padding: 40px;
     background-color: #ffffff;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 16px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
 }
+
 
 button {
     cursor: pointer;
@@ -39,7 +50,7 @@ button:hover {
 header {
     background: #35424a;
     color: #ffffff;
-    padding: 20px;
+    padding: 20px 0px;
     min-height: auto;
     border-bottom: #e8491d 3px solid;
     text-align: center;
@@ -197,8 +208,8 @@ form button {
 
 /* Footer */
 footer {
-    background: #35424a;
-    color: #ffffff;
+    background: #fcfeff;
+    color: #000000;
     text-align: center;
     padding: 20px;
     margin-top: 40px;
