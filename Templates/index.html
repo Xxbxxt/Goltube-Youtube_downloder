@@ -10,59 +10,72 @@
 <div class="container">
     <header>
         <nav>
-            <a href="/" style="color: white; text-decoration: none; font-size: 24px;">Gol tube</a>
+            <a href="/">Gol tube</a>
         </nav>
     </header>
 
-
     <main>
-    <div class="hero" style="text-align: center; margin-top: 50px;">
-        <h1>Welcome to Gol tube</h1>
-        <p>Your go-to platform for downloading YouTube videos easily and quickly.</p>
-    </div>
-
-    <!-- the field to input the url -->
-    <div class="inputField" style="text-align: center; margin-top: 30px;" >
-            <input type="text" name="url" placeholder="Enter YouTube URL" required>
-            <button type="submit" onclick="downloadOptions()">Download</button>
-    </div>
-
-
-    <!-- Display error message if any -->
-    <div style="padding: 20px; text-align: center; display: none;">
-        if {{ message }}:
-        <div style="text-align: center; margin-top: 20px; color: red;">
-            {{ message }} 
+        <div class="hero">
+            <h1>Welcome to Gol tube</h1>
+            <p>Your go-to platform for downloading YouTube videos easily and quickly.</p>
         </div>
-        endif  
-    </div>
 
-    <!-- Download options -->
-    <div id="popupModel" style="padding: 20px; text-align: center; display: none;">
-        <form name="optionsForm" action="/download" method="post">
-            <label for="format">Choose a format:</label>
-            <select name="format" id="format">
-                <option value="mp4">MP4</option>
-                <option value="mp3">MP3</option>
-                <option value="webm">WEBM</option>
-            </select>
+        <!-- the field to input the url -->
+        <div class="inputField">
+            <input type="text" id="urlInput" name="url" placeholder="Enter YouTube URL" required>
+        </div>
 
-            <select name="quality" id="vid-quality">
-                <option value="best">Best</option>
-                <option value="720p">720p</option>
-                <option value="1080p">1080p</option>
-                <option value="worst">Worst</option>
-            </select>
+        <!-- Message display -->
+        <div id="message" style="display: none; color: red; text-align: center; margin: 10px; font-weight: bold;"></div>
 
-            <label for="audio_only">Audio Only</label>
-            <input type="checkbox" id="audio_only" name="audio_only" value="yes">
+        <!-- the preview section -->
+        <!-- preview loading animation -->
+        <div id="loadingPreview" style="display: none;">
+            <h2>Loading Preview...</h2>
+            <div class="loader"></div>
+        </div>
 
-            <input type="hidden" id="hiddenUrl" name="url">
+        <div id="previewSection" class="previewSection" style="display: none;">
+            <h2>Video Preview</h2>
+            <div id="videoPreview">
+                <!-- Video preview will be displayed here -->
+            </div>
+        </div>
 
-            <button type="submit" onclick="downloadVideo()" >Download Selected Format</button>
-        </form>
-    </div>
+        <!-- Display error message if any -->
+        <div class="popupMessage">
+            if {{ message }}:
+            <div>
+                {{ message }}
+            </div>
+            endif
+        </div>
 
+        <!-- Download options -->
+        <div id="popupModel" class="DownloadOptions" style="display: none;">
+            <form name="optionsForm" action="/download" method="post">
+                <label for="format">Choose a format:</label>
+                <select name="format" id="format">
+                    <option value="mp4">MP4</option>
+                    <option value="mp3">MP3</option>
+                    <option value="webm">WEBM</option>
+                </select>
+
+                <select name="quality" id="vid-quality">
+                    <option value="best">Best</option>
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p</option>
+                    <option value="worst">Worst</option>
+                </select>
+
+                <label for="audio_only">Audio Only</label>
+                <input type="checkbox" id="audio_only" name="audio_only" value="yes">
+
+                <input type="hidden" id="hiddenUrl" name="url">
+
+                <button type="submit" onclick="downloadVideo()">Start Download</button>
+            </form>
+        </div>
     </main>
 
     <footer>
@@ -74,40 +87,148 @@
 </html>
 
 <script>
+    function loadingAnimation() {
+        console.log('Showing loading animation');
+        document.getElementById('loadingPreview').style.display = 'block';
+        document.getElementById('previewSection').style.display = 'none';
+        document.getElementById('popupModel').style.display = 'none';
+    }
+    
+    function checkValidURL(url) {
+        const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/;
+        return pattern.test(url);
+    }   
 
-    function downloadVideo() {
+    function previewVideo() {
         const url = document.querySelector('input[name="url"]').value;
-        const format = document.getElementById('format').value;
-        const quality = document.getElementById('vid-quality').value;
-        const audioOnly = document.getElementById('audio_only').checked;
-        document.getElementById('hiddenUrl').value = url;
-
+        console.log('Starting preview for URL:', url);
         if (!url) {
-            alert("Please enter a YouTube URL.");
+            showMessage("Please enter a YouTube URL.");
             return;
         }
-        // You can add more validation for the URL format here if needed
 
-        // Submit the form
-        document.querySelector('form').submit();
+        fetch('/preview', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `url=${encodeURIComponent(url)}`
+        })
+        .then(response => {
+            console.log('Response status:', response.status);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Received data:', data);
+            if (data.error) {
+                showMessage(data.error);
+                return;
+            }
+            const previewDiv = document.getElementById('videoPreview');
+            previewDiv.innerHTML = `
+                <h3>${data.title}</h3>
+                <img src="${data.thumbnail}" alt="Video Thumbnail">
+                <p>Duration: ${data.duration} seconds</p>
+            `;
+            // Hide loading, show preview and options
+            document.getElementById('loadingPreview').style.display = 'none';
+            document.getElementById('previewSection').style.display = 'block';
+            document.getElementById('popupModel').style.display = 'block';
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showMessage("Failed to fetch video preview.");
+            document.getElementById('loadingPreview').style.display = 'none';
+        });
     }
+
+    function downloadVideo() {
+    const form = document.forms.optionsForm;
+    const url = form.url.value;
+    const format = form.format.value;
+    const quality = form.quality.value;
+    const audioOnly = form.audio_only.checked;
+
+    if (!url) {
+        showMessage("Please enter a YouTube URL.");
+        return;
+    }
+
+    const downloadButton = form.querySelector('button');
+    downloadButton.disabled = true;
+    downloadButton.textContent = 'Downloading...';
+
+    const formData = new FormData(form);
+
+    fetch('/download', {
+        method: 'POST',
+        body: formData,
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = `/downloads/${data.filename}`;
+            downloadLink.textContent = `Download ${data.filename}`;
+            downloadLink.setAttribute('download', '');
+            
+            const messageDiv = document.getElementById('videoPreview');
+            messageDiv.appendChild(downloadLink);
+            
+            downloadLink.click(); // Automatically start the download
+        } else {
+            showMessage(`Error: ${data.error}`);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showMessage("An unexpected error occurred.");
+    })
+    .finally(() => {
+        downloadButton.disabled = false;
+        downloadButton.textContent = 'Start Download';
+    });
+}
 
     // function to handle download options pop up
     function downloadOptions() {
-        const format = document.getElementById('popupModel').style.display = 'block';
-
-        if (!format) {
-            showMessage("No download formats available.");
+        const url = document.querySelector('input[name="url"]').value;
+        console.log('Download options for URL:', url);
+        if (!checkValidURL(url)) {
+            alert("Please enter a valid YouTube URL.");
+            return;
+        } else {
+            console.log("Loading preview video...");
+            loadingAnimation();
+            previewVideo();
         }
-
     }
+
+   
 
     function showMessage(message) {
-        const messageDiv = document.createElement('div');
-        messageDiv.style.textAlign = 'center';
-        messageDiv.style.marginTop = '20px';
-        messageDiv.style.color = 'red';
+        const messageDiv = document.getElementById('message');
         messageDiv.textContent = message;
-        document.body.appendChild(messageDiv);
+        messageDiv.style.display = 'block';
+        setTimeout(() => {
+            messageDiv.style.display = 'none';
+        }, 5000);
     }
+
+    // Auto-load preview on URL input
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('urlInput').addEventListener('input', function() {
+            const url = this.value.trim();
+            if (checkValidURL(url)) {
+                console.log('Valid URL entered, loading preview');
+                loadingAnimation();
+                previewVideo();
+            } else {
+                console.log('Invalid URL, hiding preview');
+                document.getElementById('loadingPreview').style.display = 'none';
+                document.getElementById('previewSection').style.display = 'none';
+                document.getElementById('popupModel').style.display = 'none';
+            }
+        });
+    });
 </script>
