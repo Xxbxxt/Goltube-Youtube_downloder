@@ -35,7 +35,11 @@ def preview():
     logging.debug(f"Preview request for URL: {url}")
     
     # Set yt-dlp options to quiet mode to prevent verbose output
-    ydl_opts = {'quiet': True, 'js_runtimes': {'node': {}}}
+    ydl_opts = {
+        'quiet': True,
+        'noplaylist': True,
+        'js_runtimes': {'node': {}}
+    }
     try:
         # Use YoutubeDL to extract video information without downloading
         with YoutubeDL(ydl_opts) as ydl:
@@ -74,7 +78,6 @@ def download_video():
             'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
             'noplaylist': True,
             'js_runtimes': {'node': {}},
-            'ffmpeg_location': os.path.join(os.path.dirname(__file__), 'ffmpeg', 'ffmpeg-8.0.1-essentials_build', 'bin', 'ffmpeg.exe'),
         }
 
         if audio_only:
