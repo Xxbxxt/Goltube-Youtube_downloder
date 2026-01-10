@@ -10,11 +10,34 @@
 <div class="container">
     <header>
         <nav>
-            <a href="/">Gol tube</a>
+            <a href="/"><span id="logo" style="display: none;"></span> Gol tube</a>
         </nav>
+
+        <div class="settings-dropdown">
+        <label for="settings">Settings</label>
+        <select name="Settings" id="settings" onchange="handleSettings(this.value);">
+            <option value="">Select</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="Downloadpath">Download Path</option>
+        </select>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeSettingsModal()">&times;</span>
+                <h2>Settings</h2>
+                <label for="downloadDir">Download Directory:</label>
+                <input type="text" id="downloadDir" placeholder="Enter path or leave empty for default (~/Downloads)">
+                <button onclick="saveSettings()">Save</button>
+            </div>
+        </div>
+        
     </header>
 
     <main>
+        <!-- the hero section -->
         <div class="hero">
             <h1>Welcome to Gol tube</h1>
             <p>Your go-to platform for downloading YouTube videos easily and quickly.</p>
@@ -35,20 +58,19 @@
             <div class="loader"></div>
         </div>
 
-        <div id="previewSection" class="previewSection" style="display: none;">
+        <div id="previewSection" class="previewSection">
             <h2>Video Preview</h2>
             <div id="videoPreview">
                 <!-- Video preview will be displayed here -->
             </div>
         </div>
 
-        <!-- Display error message if any -->
-        <div class="popupMessage">
-            if {{ message }}:
-            <div>
-                {{ message }}
-            </div>
-            endif
+        <!-- Popup Message -->
+        <div id="popupMessage" class="popupMessage">
+            <span class="close-btn" onclick="closePopup()">&times;</span>
+            <p id="popupMessageText"></p>
+            <!-- progress bar -->
+            <progress id="messageOffProgress" value="0" max="100" style="width: 60%; display: block;"></progress> 
         </div>
 
         <!-- Download options -->
@@ -76,6 +98,13 @@
                 <button type="button" onclick="downloadVideo()">Start Download</button>
             </form>
         </div>
+
+        <!-- download progress -->
+         <div class="progressContainer" id="progressContainer">
+            <div class="progress-bar" id="downloadProgress">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+         </div>
     </main>
 
     <footer>
@@ -106,7 +135,7 @@
         const url = document.querySelector('input[name="url"]').value;
         console.log('Starting preview for URL:', url);
         if (!url) {
-            showMessage("Please enter a YouTube URL.");
+            showInlineMessage("Please enter a YouTube URL.");
             return;
         }
 
@@ -124,7 +153,7 @@
         .then(data => {
             console.log('Received data:', data);
             if (data.error) {
-                showMessage(data.error);
+                showInlineMessage(data.error);
                 return;
             }
             const previewDiv = document.getElementById('videoPreview');
@@ -143,59 +172,89 @@
         })
         .catch(error => {
             console.error('Error:', error);
-            showMessage("Failed to fetch video preview.");
+            showInlineMessage("Failed to fetch video preview.");
             document.getElementById('loadingPreview').style.display = 'none';
         });
     }
 
     // function to download video
     function downloadVideo() {
-    const form = document.forms.optionsForm;
-    const url = form.url.value;
-    const format = form.format.value;
-    const quality = form.quality.value;
-    const audioOnly = form.audio_only.checked;
+        const form = document.forms.optionsForm;
+        const downloadButton = form.querySelector('button');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
 
-    if (!url) {
-        showMessage("Please enter a YouTube URL.");
-        return;
-    }
+        showPopup('Download has started!');
 
-    const downloadButton = form.querySelector('button');
-    downloadButton.disabled = true;
-    downloadButton.textContent = 'Downloading...';
+        // Disable button and show progress bar
+        downloadButton.disabled = true;
+        downloadButton.textContent = 'Starting...';
+        progressContainer.style.display = 'block';
+        progressFill.style.width = '0%';
 
-    const formData = new FormData(form);
+        const formData = new FormData(form);
 
-    fetch('/download', {
-        method: 'POST',
-        body: formData,
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            const downloadLink = document.createElement('a');
-            downloadLink.href = `/downloads/${data.filename}`;
-            downloadLink.textContent = `Download ${data.filename}`;
-            downloadLink.setAttribute('download', '');
+        // 1. Start the download process on the backend
+        fetch('/download', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                showPopup(data.error || "Failed to start download.");
+                throw new Error(data.error);
+            }
             
-            const messageDiv = document.getElementById('videoPreview');
-            messageDiv.appendChild(downloadLink);
+            // 2. Start listening for progress updates
+            const taskId = data.task_id;
+            const eventSource = new EventSource('/progress/' + taskId);
             
-            downloadLink.click(); // Automatically start the download
-        } else {
-            showMessage(`Error: ${data.error}`);
+            downloadButton.textContent = 'Downloading...';
+
+            eventSource.onmessage = function(event) {
+                const progressData = JSON.parse(event.data);
+
+                if (progressData.status === 'downloading' || progressData.status === 'processing') {
+                    progressFill.style.width = progressData.progress + '%';
+                    downloadButton.textContent = progressData.status === 'processing' ? 'Processing...' : 'Downloading...';
+                } else if (progressData.status === 'finished') {
+                    // 3. Download is complete, create download link
+                    showPopup(`Download complete: ${progressData.filename}`);
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = `/downloads/${progressData.filename}`;
+                    downloadLink.download = progressData.filename;
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                    eventSource.close();
+                    resetUI();
+                } else if (progressData.status === 'error') {
+                    // 4. Handle errors
+                    showPopup(`Error: ${progressData.error}`);
+                    eventSource.close();
+                    resetUI();
+                }
+            };
+
+            eventSource.onerror = function() {
+                showPopup("An error occurred with the progress connection.");
+                eventSource.close();
+                resetUI();
+            };
+        })
+        .catch(error => {
+            console.error('Error starting download:', error);
+            resetUI();
+        });
+
+        function resetUI() {
+            downloadButton.disabled = false;
+            downloadButton.textContent = 'Start Download';
+            progressContainer.style.display = 'none';
+            progressFill.style.width = '0%';
         }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        showMessage("An unexpected error occurred.");
-    })
-    .finally(() => {
-        downloadButton.disabled = false;
-        downloadButton.textContent = 'Start Download';
-    });
-}
+    }
 
     // function to handle download options pop up
     function downloadOptions() {
@@ -211,14 +270,97 @@
         }
     }
 
-// function to show message
-    function showMessage(message) {
+    // function to show inline error messages
+    function showInlineMessage(message) {
         const messageDiv = document.getElementById('message');
         messageDiv.textContent = message;
         messageDiv.style.display = 'block';
         setTimeout(() => {
             messageDiv.style.display = 'none';
         }, 5000);
+    }
+
+    // function to show popup messages
+    function showPopup(message) {
+        const popup = document.getElementById('popupMessage');
+        const popupText = document.getElementById('popupMessageText');
+        const messageProgressBar = document.getElementById('messageOffProgress');
+        popupText.textContent = message;
+        popup.style.display = 'block';
+
+        messageProgressBar.value = 0;
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += 1; // Increment by 1% every 200ms (20s total)
+            messageProgressBar.value = progress;
+            if (progress >= 100) {
+                clearInterval(interval);
+            }
+        }, 200); // 200ms * 100 = 20s   
+
+        setTimeout(() => {
+            popup.style.display = 'none';
+        }, 20000); // 20 seconds
+    }
+
+    // function to close popup
+    function closePopup() {
+        const popup = document.getElementById('popupMessage');
+        popup.style.display = 'none';
+    }
+
+    // function to handle settings
+    function handleSettings(value) {
+        if (value === 'Downloadpath') {
+            openSettingsModal();
+        } else if (value === 'light') {
+            setTheme('light');
+        } else if (value === 'dark') {
+            setTheme('dark');
+        }
+        // Reset select
+        document.getElementById('settings').value = '';
+    }
+
+    // function to open settings modal
+    function openSettingsModal() {
+        document.getElementById('settingsModal').style.display = 'block';
+    }
+
+    // function to close settings modal
+    function closeSettingsModal() {
+        document.getElementById('settingsModal').style.display = 'none';
+    }
+
+    // function to save settings
+    function saveSettings() {
+        const dir = document.getElementById('downloadDir').value;
+        fetch('/set_download_dir', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `dir=${encodeURIComponent(dir)}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showPopup('Download directory updated!');
+                closeSettingsModal();
+            } else {
+                showPopup('Failed to update directory.');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showPopup('Error updating directory.');
+        });
+    }
+
+    // function to set theme (placeholder)
+    function setTheme(theme) {
+        // Implement theme switching if needed
+        showPopup(`Theme set to ${theme}`);
     }
 
     // Auto-load preview on URL input
