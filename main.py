@@ -9,7 +9,7 @@ import json
 
 # Configure logging to display debug messages
 # Suppress werkzeug's default INFO logs for cleaner output
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
+logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.basicConfig(level=logging.DEBUG)
 
 # Create a Flask application instance
@@ -201,4 +201,4 @@ def set_download_dir():
 
 # Run the Flask application in debug mode
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
