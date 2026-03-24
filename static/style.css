@@ -7,29 +7,33 @@
 
 
 body {
-    background: white;
-    min-height: 100vh;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
     align-items: center;
+    gap:20px;
+
+    background: white;
+    background-size: cover;
+    background-position: center;
     padding: 20px;
     color: #333;
     line-height: 1.6;
 }
 
 
-.container {
+/* Main Content */
+main {
+    background: transparent;
     width: 100%;
-    padding: 40px;
+    min-height: 50vh;
+    padding: 4px;
     background-color: #ffffff;
     border-radius: 16px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
     text-align: center;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
 }
-
 
 button {
     cursor: pointer;
@@ -49,18 +53,19 @@ button:hover {
 /* Header & Navigation */
 header {
     background: #35424a;
+    width: 95%;
     color: #ffffff;
-    padding: 20px 0px;
-    min-height: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    padding: 2px 2px;
+    margin-bottom: 2px;
     border-bottom: #e8491d 3px solid;
-    text-align: center;
     border-radius: 8px 8px 0 0;
 }
 
 header a {
     color: #ffffff;
     text-decoration: none;
-    font-size: 28px;
+    font-size: 20px;
     font-weight: bold;
 }
 
@@ -69,6 +74,19 @@ nav {
     justify-content: center;
     float: left;
     padding: 20px;
+}
+
+#logo{
+    text-align: center;
+    color: gold;
+    text-decoration: dotted;
+}
+
+.pages{
+    display: flex;
+    gap: 25px;
+    padding-left: 30px;
+    margin: 0 15px;
 }
 
 /* Hero Section */
@@ -95,13 +113,6 @@ nav {
     margin: 10px 20px;
 }
 
-/* Main Content */
-main {
-    padding: 0;
-    background: transparent;
-    margin-top: 0;
-    box-shadow: none;
-}
 
 /* Form Styling */
 form {
@@ -154,6 +165,26 @@ form button {
     width: auto;
     padding: 12px 20px;
     font-size: 16px;
+}
+
+.feature_cards{
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding: 20px;
+}
+
+.card{
+    width: 300px;
+    height: 200px;
+    border: 1px solid #ccc;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    border-radius: 5px;
+    padding: 20px;
+    margin: 10px;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    background-color: #f9f9f9;
+    text-align: center;
 }
 
 /* Popup Message */

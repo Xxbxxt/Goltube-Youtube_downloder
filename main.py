@@ -34,7 +34,6 @@ def check_playlist(url):
     query_params = parse_qs(parsed_url.query)
     return 'list' in query_params
 
-
 ###################### Endpoints ######################
 @app.route('/')
 def index():
@@ -42,6 +41,10 @@ def index():
     Renders the main page of the application.
     """
     return render_template('index.html')
+
+@app.route('/history')
+def history():
+    return render_template('history.html')
 
 @app.route('/preview', methods=['POST'])
 def preview():
