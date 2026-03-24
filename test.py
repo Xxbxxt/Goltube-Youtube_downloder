@@ -8,9 +8,17 @@ def test_youtube_url(url):
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
-        # 'remote_components': 'ejs:github', # Temporarily removed due to parsing issues
-        'js_runtimes': {'node': None}, # Explicitly tell yt-dlp to use Node.js, with no special config
     }
+    # Try to configure Node.js for yt-dlp (requires full path on Windows)
+    try:
+        import subprocess
+        # Use 'where' on Windows, 'which' on Linux/macOS
+        command = 'where' if os.name == 'nt' else 'which'
+        node_path = subprocess.run([command, 'node'], capture_output=True, text=True, check=True).stdout.strip().split('\n')[0]
+        ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
+    except (subprocess.CalledProcessError, IndexError, FileNotFoundError):
+        print("Node.js executable not found or 'where'/'which' command failed. yt-dlp might not function optimally.")
+        # Keep default if detection fails, or proceed without explicit path
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)

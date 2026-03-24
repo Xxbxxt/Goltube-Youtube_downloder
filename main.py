@@ -26,6 +26,16 @@ if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
 
+def check_playlist(url):
+    """
+    Checks if the provided URL is a YouTube playlist..
+    """
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    return 'list' in query_params
+
+
+###################### Endpoints ######################
 @app.route('/')
 def index():
     """
@@ -47,49 +57,71 @@ def preview():
         url = request.json.get('url')
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
-    
-    # Strip playlist parameters from URL to prevent noplaylist conflicts
-    parsed_url = urlparse(url)
-    query_params = parse_qs(parsed_url.query)
-    if 'list' in query_params:
-        clean_query = '&'.join(f"{k}={v[0]}" for k, v in query_params.items() if k != 'list')
-        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
-        if clean_query:
-            url += f"?{clean_query}"
-    
-    # Set yt-dlp options to quiet mode
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-    }
-    
-    # Try to configure Node.js for yt-dlp
-    try:
-        import subprocess
-        node_path = subprocess.run(['where', 'node'], capture_output=True, text=True).stdout.strip().split('\n')[0]
-        ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
-    except Exception:
-        pass  # Keep default if detection fails
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            if info is None:
-                return jsonify({'error': 'Could not retrieve video information. The URL might be invalid or unsupported.'}), 400
-            
-            if not isinstance(info, dict):
-                return jsonify({'error': 'Unexpected response format from yt-dlp'}), 400
-                
-            return jsonify({
-                'title': info.get('title', 'No title available'),
-                'thumbnail': info.get('thumbnail', ''),
-                'duration': info.get('duration', 0)
-            })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
 
-def run_download(task_id, url, ydl_opts, audio_only, format_choice):
+    if check_playlist(url):
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': False,
+            'extract_flat': True,
+            'noplaylist': False,
+        }
+        # Add Node.js config
+        try:
+            import subprocess
+            node_path = subprocess.run(['where', 'node'], capture_output=True, text=True).stdout.strip().split('\n')[0]
+            ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
+        except Exception:
+            pass
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info is None:
+                    return jsonify({'error': 'Could not retrieve playlist information. The URL might be invalid or unsupported.'}), 400
+                if not isinstance(info, dict):
+                    return jsonify({'error': 'Unexpected response format from yt-dlp'}), 400
+                return jsonify({
+                    'title': info.get('title', 'No title available'),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'duration': info.get('duration', 0),
+                    'playlist': True,
+                    'entries': info.get('entries', [])
+                })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+    else: 
+        # Set yt-dlp options to quiet mode
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+        }
+        
+        # Try to configure Node.js for yt-dlp
+        try:
+            import subprocess
+            node_path = subprocess.run(['where', 'node'], capture_output=True, text=True).stdout.strip().split('\n')[0]
+            ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
+        except Exception:
+            pass  # Keep default if detection fails
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                if info is None:
+                    return jsonify({'error': 'Could not retrieve video information. The URL might be invalid or unsupported.'}), 400
+                
+                if not isinstance(info, dict):
+                    return jsonify({'error': 'Unexpected response format from yt-dlp'}), 400
+                    
+                return jsonify({
+                    'title': info.get('title', 'No title available'),
+                    'thumbnail': info.get('thumbnail', ''),
+                    'duration': info.get('duration', 0)
+                })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+
+def run_download(task_id, url, ydl_opts, audio_only, format_choice, is_playlist=False, playlist_entries=None):
     """
     This function runs in a separate thread to handle the download,
     updating the progress via the global `download_progress` dictionary.
@@ -102,11 +134,52 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice):
                 progress = float(percent_str)
                 download_progress[task_id]['progress'] = progress
                 download_progress[task_id]['status'] = 'downloading'
+                # For playlists, show which video is downloading
+                if is_playlist and 'info_dict' in d:
+                    video_title = d['info_dict'].get('title', '')
+                    if video_title:
+                        download_progress[task_id]['current_title'] = video_title
             except (ValueError, TypeError):
                 pass # Ignore if conversion fails
         elif d['status'] == 'finished':
             download_progress[task_id]['status'] = 'processing'
 
+    # Let yt-dlp handle playlist natively - it will download all videos in the playlist
+    ydl_opts['progress_hooks'] = [progress_hook]
+
+    try:
+        logging.info(f"Starting download - is_playlist: {is_playlist}")
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            
+            # For playlists, info might be a list of entries
+            if is_playlist and isinstance(info, list):
+                # Multiple videos downloaded
+                filenames = []
+                for entry in info:
+                    filename = ydl.prepare_filename(entry)
+                    filenames.append(os.path.basename(filename))
+                download_progress[task_id].update({
+                    'status': 'finished',
+                    'filename': ', '.join(filenames),
+                    'progress': 100
+                })
+                logging.info(f"Playlist downloaded: {len(filenames)} videos")
+            else:
+                # Single video
+                filename = ydl.prepare_filename(info)
+                if audio_only:
+                    filename = os.path.splitext(filename)[0] + '.' + (format_choice if format_choice in ['mp3', 'wav'] else 'mp3')
+                
+                download_progress[task_id].update({
+                    'status': 'finished',
+                    'filename': os.path.basename(filename),
+                    'progress': 100
+                })
+                logging.info(f"Downloaded: {filename}")
+    except Exception as e:
+        logging.error(f"Error in download thread for task {task_id}: {e}")
+        download_progress[task_id].update({'status': 'error', 'error': str(e)})
     ydl_opts['progress_hooks'] = [progress_hook]
 
     try:
@@ -131,7 +204,7 @@ def download_video():
     Initiates a YouTube video download in a background thread and returns a task ID.
     """
     url = request.form.get('url', '').strip()
-    logging.debug(f"Download request for URL: {url}")
+    logging.info(f"Download request started for URL: {url}")
     format_choice = request.form.get('format', 'mp4')
     quality_choice = request.form.get('quality', 'best')
     audio_only = request.form.get('audio_only') == 'yes'
@@ -140,23 +213,48 @@ def download_video():
         logging.error("No URL provided for download")
         return jsonify({'success': False, 'error': 'No URL provided'}), 400
 
-    # Strip playlist parameters from URL to prevent noplaylist conflicts
-    parsed_url = urlparse(url)
-    query_params = parse_qs(parsed_url.query)
-    if 'list' in query_params:
-        clean_query = '&'.join(f"{k}={v[0]}" for k, v in query_params.items() if k != 'list')
-        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
-        if clean_query:
-            url += f"?{clean_query}"
-        logging.debug(f"Cleaned URL (removed playlist param): {url}")
-
+    # Check if URL is a playlist
+    is_playlist = check_playlist(url)
+    logging.info(f"Is playlist: {is_playlist}")
+    
     # Set yt-dlp options for the download
-    ydl_opts = {
-        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-    }
+    # For playlists, create a subfolder with the playlist name
+    if is_playlist:
+        # Get playlist title first (we'll use a placeholder for now)
+        playlist_folder = os.path.join(DOWNLOAD_FOLDER, '%(playlist)s')
+        ydl_opts = {
+            'outtmpl': os.path.join(playlist_folder, '%(title)s.%(ext)s'),
+            'noplaylist': False,
+            'quiet': True,
+            'no_warnings': True,
+            # Add headers to bypass 403 errors
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            # Use alternative client
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                }
+            },
+        }
+    else:
+        ydl_opts = {
+            'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            # Add headers to bypass 403 errors
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+            # Use alternative client
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                }
+            },
+        }
     
     # Try to configure Node.js for yt-dlp (requires full path on Windows)
     try:
@@ -188,10 +286,25 @@ def download_video():
 
     # Generate a unique task ID
     task_id = str(uuid.uuid4())
-    download_progress[task_id] = {'progress': 0, 'status': 'starting'}
+    
+    # For playlists, let yt-dlp handle it natively - don't pre-extract entries
+    playlist_entries = None
+    if is_playlist:
+        download_progress[task_id] = {
+            'progress': 0, 
+            'status': 'starting',
+            'playlist': True,
+            'title': 'Playlist'
+        }
+        logging.info("Will download playlist using yt-dlp natively")
+    else:
+        download_progress[task_id] = {'progress': 0, 'status': 'starting'}
 
     # Start the download in a background thread
-    thread = threading.Thread(target=run_download, args=(task_id, url, ydl_opts, audio_only, format_choice))
+    thread = threading.Thread(
+        target=run_download, 
+        args=(task_id, url, ydl_opts, audio_only, format_choice, is_playlist, playlist_entries)
+    )
     thread.daemon = True
     thread.start()
 

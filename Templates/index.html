@@ -157,11 +157,29 @@
                 return;
             }
             const previewDiv = document.getElementById('videoPreview');
-            previewDiv.innerHTML = `
-                <h3>${data.title}</h3>
-                <img src="${data.thumbnail}" alt="Video Thumbnail">
-                <p>Duration: ${data.duration} seconds</p>
-            `;
+            if (data.playlist) {
+                // Grab only the first 20 videos using .slice()
+                let displayEntries = data.entries.slice(0, 20);
+                let entriesHtml = displayEntries.map((entry, index) => `
+                    <div class="playlist-entry">
+                        <span class="entry-index">${index + 1}.</span>
+                        <img src="${entry.thumbnail || ''}" alt="${entry.title}" class="entry-thumbnail">
+                        <span class="entry-title">${entry.title}</span>
+                    </div>
+                `).join('');
+                let moreText = data.entries.length > 20 ? ` (Showing first 20)` : '';
+                previewDiv.innerHTML = `
+                    <h3>Playlist: ${data.title}</h3>
+                    <p>Contains ${data.entries.length} videos${moreText}.</p>
+                    <div class="playlist-entries-list">${entriesHtml}</div>
+                `;
+            } else {
+                previewDiv.innerHTML = `
+                    <h3>${data.title}</h3>
+                    <img src="${data.thumbnail}" alt="Video Thumbnail">
+                    <p>Duration: ${data.duration} seconds</p>
+                `;
+            }
             // Set the hidden URL field value
             document.getElementById('hiddenUrl').value = url;
 

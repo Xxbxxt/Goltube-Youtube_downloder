@@ -273,6 +273,49 @@ form button {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+/* Playlist Preview Styles */
+.playlist-entries-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 15px;
+    text-align: left;
+    background-color: #fcfcfc;
+}
+
+.playlist-entry {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.playlist-entry:last-child {
+    border-bottom: none;
+}
+
+.entry-index {
+    font-weight: bold;
+    margin-right: 15px;
+    color: #666;
+    min-width: 25px;
+}
+
+.entry-thumbnail {
+    width: 80px;
+    height: 45px;
+    object-fit: cover;
+    border-radius: 4px;
+    margin-right: 15px;
+}
+
+.entry-title {
+    font-size: 14px;
+    color: #333;
+}
+
 /* Modal */
 .modal {
     display: none;
