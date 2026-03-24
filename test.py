@@ -8,11 +8,15 @@ def test_youtube_url(url):
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
-        'remote_components': 'ejs:github'
+        # 'remote_components': 'ejs:github', # Temporarily removed due to parsing issues
+        'js_runtimes': {'node': None}, # Explicitly tell yt-dlp to use Node.js, with no special config
     }
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if info is None:
+                print(f"Failed to extract info for URL: {url}. yt-dlp returned no data.")
+                return False
             if info:
                 print(f"Successfully extracted info for URL: {url}")
                 print(f"Title: {info.get('title')}")

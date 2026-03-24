@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, send_file, jsonify, Response
 from yt_dlp import YoutubeDL
+from urllib.parse import urlparse, parse_qs
 import os
 import logging
 import threading
@@ -8,7 +9,6 @@ import time
 import json
 
 # Configure logging to display debug messages
-# Suppress werkzeug's default INFO logs for cleaner output
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 logging.basicConfig(level=logging.DEBUG)
 
@@ -41,27 +41,52 @@ def preview():
     Accepts a POST request with a 'url' field and returns a JSON object
     containing the video's title, thumbnail, and duration.
     """
-    url = request.form['url']
-    logging.debug(f"Preview request for URL: {url}")
+    # Handle form data and JSON requests
+    url = request.form.get('url')
+    if not url and request.json:
+        url = request.json.get('url')
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
     
-    # Set yt-dlp options to quiet mode to prevent verbose output
+    # Strip playlist parameters from URL to prevent noplaylist conflicts
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    if 'list' in query_params:
+        clean_query = '&'.join(f"{k}={v[0]}" for k, v in query_params.items() if k != 'list')
+        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+        if clean_query:
+            url += f"?{clean_query}"
+    
+    # Set yt-dlp options to quiet mode
     ydl_opts = {
         'quiet': True,
+        'no_warnings': True,
         'noplaylist': True,
-        'remote_components': 'ejs:github'
     }
+    
+    # Try to configure Node.js for yt-dlp
     try:
-        # Use YoutubeDL to extract video information without downloading
+        import subprocess
+        node_path = subprocess.run(['where', 'node'], capture_output=True, text=True).stdout.strip().split('\n')[0]
+        ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
+    except Exception:
+        pass  # Keep default if detection fails
+    try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            logging.debug(f"Extracted info: title={info.get('title')}, thumbnail={info.get('thumbnail')}, duration={info.get('duration')}")
+            
+            if info is None:
+                return jsonify({'error': 'Could not retrieve video information. The URL might be invalid or unsupported.'}), 400
+            
+            if not isinstance(info, dict):
+                return jsonify({'error': 'Unexpected response format from yt-dlp'}), 400
+                
             return jsonify({
                 'title': info.get('title', 'No title available'),
                 'thumbnail': info.get('thumbnail', ''),
                 'duration': info.get('duration', 0)
             })
     except Exception as e:
-        logging.error(f"Error in preview: {e}")
         return jsonify({'error': str(e)}), 400
 
 def run_download(task_id, url, ydl_opts, audio_only, format_choice):
@@ -115,15 +140,31 @@ def download_video():
         logging.error("No URL provided for download")
         return jsonify({'success': False, 'error': 'No URL provided'}), 400
 
+    # Strip playlist parameters from URL to prevent noplaylist conflicts
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+    if 'list' in query_params:
+        clean_query = '&'.join(f"{k}={v[0]}" for k, v in query_params.items() if k != 'list')
+        url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+        if clean_query:
+            url += f"?{clean_query}"
+        logging.debug(f"Cleaned URL (removed playlist param): {url}")
+
     # Set yt-dlp options for the download
     ydl_opts = {
         'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
         'noplaylist': True,
-        'remote_components': 'ejs:github',
-        # Suppress yt-dlp's own console output to avoid clutter
         'quiet': True,
         'no_warnings': True,
     }
+    
+    # Try to configure Node.js for yt-dlp (requires full path on Windows)
+    try:
+        import subprocess
+        node_path = subprocess.run(['where', 'node'], capture_output=True, text=True).stdout.strip().split('\n')[0]
+        ydl_opts['js_runtimes'] = {'node': {'exe': node_path}}
+    except Exception:
+        pass  # Keep default if detection fails
 
     if audio_only:
         # Configure options for audio-only downloads
