@@ -203,10 +203,12 @@
                     '<div class="playlist-entries-list">' + entriesHtml + '</div>';
             } else {
                 var durationStr = formatDuration(data.duration);
+                // Store format sizes for dynamic preview
+                window._formatSizes = data.format_sizes || {};
                 var sizeStr = data.filesize_formatted ? ' | Size: ~' + data.filesize_formatted : '';
                 previewDiv.innerHTML = '<h3>' + escapeHtml(data.title) + '</h3>' +
                     '<img src="' + (data.thumbnail || '') + '" alt="Video Thumbnail">' +
-                    '<p>Duration: ' + durationStr + sizeStr + '</p>';
+                    '<p id="previewSizeLine">Duration: ' + durationStr + sizeStr + '</p>';
             }
             document.getElementById('hiddenUrl').value = url;
             document.getElementById('loadingPreview').style.display = 'none';
@@ -259,6 +261,7 @@
             }
 
             currentTaskId = data.task_id;
+            sessionStorage.setItem('goltube-active-task', currentTaskId);
             var eventSource = new EventSource('/progress/' + currentTaskId);
             downloadButton.textContent = 'Downloading...';
 
@@ -304,6 +307,7 @@
                     downloadLink.click();
                     document.body.removeChild(downloadLink);
                     eventSource.close();
+                    sessionStorage.removeItem('goltube-active-task');
                     resetUI();
 
                 } else if (progressData.status === 'cancelled') {
@@ -316,6 +320,7 @@
                     showToast('Error: ' + (progressData.error || 'Unknown error'), 'error');
                     cancelBtn.style.display = 'none';
                     eventSource.close();
+                    sessionStorage.removeItem('goltube-active-task');
                     resetUI();
                 }
             };
@@ -330,6 +335,7 @@
         .catch(function(error) {
             console.error('Error starting download:', error);
             cancelBtn.style.display = 'none';
+            sessionStorage.removeItem('goltube-active-task');
             resetUI();
         });
 
@@ -474,15 +480,107 @@
         var audioLabel = document.querySelector('label[for="audio_only"]');
         var audioCheckbox = document.getElementById('audio_only');
 
+        function updatePreviewSize() {
+            var sizes = window._formatSizes;
+            if (!sizes) return;
+            var fmt = formatSelect.value;
+            var q = qualitySelect.value;
+            var isAudio = fmt === 'mp3';
+            // Build the lookup key
+            var key;
+            if (isAudio) {
+                key = 'mp3_audio';
+                // For wav just show estimate
+                if (fmt === 'wav') key = 'wav_audio';
+            } else {
+                key = fmt + '_' + q;
+            }
+            var sizeLine = document.getElementById('previewSizeLine');
+            if (!sizeLine) return;
+            var base = sizeLine.textContent.split('|')[0].trim();
+            var size = sizes[key];
+            if (size) {
+                sizeLine.textContent = base + ' | Size: ~' + formatSize(size);
+            } else {
+                // Try to find closest match
+                var fallback = sizes[fmt + '_best'] || sizes[fmt + '_1080p'] || sizes[fmt + '_720p'];
+                if (fallback) {
+                    sizeLine.textContent = base + ' | Size: ~' + formatSize(fallback) + ' (estimate)';
+                } else {
+                    sizeLine.textContent = base;
+                }
+            }
+        }
+
         function toggleFormatOptions() {
             var isAudio = formatSelect.value === 'mp3';
             qualitySelect.style.display = isAudio ? 'none' : 'inline-block';
             if (audioLabel) audioLabel.style.display = isAudio ? 'none' : 'inline';
             if (audioCheckbox) audioCheckbox.style.display = isAudio ? 'none' : 'inline-block';
+            updatePreviewSize();
         }
 
         formatSelect.addEventListener('change', toggleFormatOptions);
+        qualitySelect.addEventListener('change', updatePreviewSize);
         toggleFormatOptions(); // run once on load
+
+        // Restore active download from previous page visit
+        var activeTaskId = sessionStorage.getItem('goltube-active-task');
+        if (activeTaskId) {
+            // Check if the task is still active via a lightweight fetch
+            var checkSource = new EventSource('/progress/' + activeTaskId);
+            var checkTimer = setTimeout(function() {
+                // If no data received in 2s, assume task is stale
+                checkSource.close();
+                sessionStorage.removeItem('goltube-active-task');
+            }, 2000);
+            checkSource.onmessage = function(event) {
+                clearTimeout(checkTimer);
+                var data = JSON.parse(event.data);
+                if (data.status && data.status !== 'starting') {
+                    // Active task found — reconnect the UI
+                    checkSource.close();
+                    currentTaskId = activeTaskId;
+                    var dlBtn = document.querySelector('#popupModel button');
+                    if (dlBtn) dlBtn.disabled = true;
+                    document.getElementById('progressContainer').style.display = 'block';
+                    document.getElementById('cancelBtn').style.display = 'inline-block';
+                    dlBtn.textContent = 'Downloading...';
+                    // Start fresh SSE
+                    var es = new EventSource('/progress/' + currentTaskId);
+                    es.onmessage = function(ev) {
+                        var pd = JSON.parse(ev.data);
+                        var pf = document.getElementById('progressFill');
+                        var pp = document.getElementById('progressPercent');
+                        var ps = document.getElementById('progressSpeed');
+                        var pz = document.getElementById('progressSize');
+                        var cb = document.getElementById('cancelBtn');
+                        if (pd.status === 'downloading' || pd.status === 'processing') {
+                            var pct = pd.progress || 0;
+                            pf.style.width = pct + '%';
+                            pp.textContent = Math.round(pct) + '%';
+                            dlBtn.textContent = pd.status === 'processing' ? 'Processing...' : 'Downloading...';
+                            if (pd.speed) ps.textContent = formatSpeed(pd.speed);
+                            if (pd.total_bytes && pd.downloaded_bytes) pz.textContent = formatSize(pd.downloaded_bytes) + ' / ' + formatSize(pd.total_bytes);
+                            else if (pd.total_bytes) pz.textContent = formatSize(pd.total_bytes);
+                        } else if (pd.status === 'finished' || pd.status === 'error' || pd.status === 'cancelled') {
+                            es.close();
+                            sessionStorage.removeItem('goltube-active-task');
+                            cb.style.display = 'none';
+                            dlBtn.disabled = false;
+                            dlBtn.textContent = 'Start Download';
+                            document.getElementById('progressContainer').style.display = 'none';
+                            if (pd.status === 'finished') showToast('Download already complete!', 'success');
+                            else if (pd.status === 'error') showToast('Download failed: ' + (pd.error || ''), 'error');
+                        }
+                    };
+                    es.onerror = function() {
+                        es.close();
+                        sessionStorage.removeItem('goltube-active-task');
+                    };
+                }
+            };
+        }
 
         // Debounced auto-preview
         var previewTimer = null;

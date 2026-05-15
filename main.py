@@ -10,7 +10,6 @@ import json
 import subprocess
 import sqlite3
 import datetime
-import shutil
 import secrets
 from functools import wraps
 
@@ -110,6 +109,9 @@ def rate_limit(max_requests=10, window_seconds=60):
     return decorator
 
 
+_download_lock = threading.Lock()
+
+
 def get_progress(task_id):
     with _download_lock:
         return download_progress.get(task_id, {})
@@ -138,7 +140,7 @@ def set_cancel_event(task_id, event):
 
 def del_cancel_event(task_id):
     with _download_lock:
-        del_cancel_event(task_id)
+        _cancel_events.pop(task_id, None)
 
 def check_ffmpeg():
     """Check if FFmpeg is available and warn if not."""
@@ -177,6 +179,7 @@ DB_PATH = os.path.join(CONFIG_DIR, 'history.db')
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
+    conn.execute('PRAGMA journal_mode=WAL')
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -384,12 +387,36 @@ def preview():
                     mid = len(info['formats']) // 2
                     filesize = info['formats'][mid].get('filesize', 0) or info['formats'][mid].get('filesize_approx', 0) or 0
                     
+                # Build per-quality size estimates for each format+quality combo
+                format_sizes = {}
+                for fmt in info.get('formats', []):
+                    ext = fmt.get('ext', '')
+                    height = fmt.get('height')
+                    quality_key = f'{height}p' if height else fmt.get('format_note', 'unknown')
+                    fsize = fmt.get('filesize', 0) or fmt.get('filesize_approx', 0) or 0
+                    if ext and fsize:
+                        key = f'{ext}_{quality_key}'
+                        if key not in format_sizes or fsize > format_sizes[key]:
+                            format_sizes[key] = fsize
+                
+                # Also compute audio-only sizes (bestaudio format)
+                audio_size = 0
+                for fmt in info.get('formats', []):
+                    if fmt.get('vcodec') == 'none' and fmt.get('acodec') != 'none':
+                        fsize = fmt.get('filesize', 0) or fmt.get('filesize_approx', 0) or 0
+                        if fsize > audio_size:
+                            audio_size = fsize
+                if audio_size:
+                    format_sizes['mp3_audio'] = audio_size
+                    format_sizes['wav_audio'] = audio_size * 5  # rough estimate: wav ~5x mp3
+                
                 return jsonify({
                     'title': info.get('title', 'No title available'),
                     'thumbnail': info.get('thumbnail', ''),
                     'duration': info.get('duration', 0),
                     'filesize': filesize,
                     'filesize_formatted': format_filesize(filesize) if filesize else None,
+                    'format_sizes': format_sizes,
                 })
         except Exception as e:
             return jsonify({'error': str(e)}), 400

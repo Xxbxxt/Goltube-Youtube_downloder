@@ -46,7 +46,7 @@ The project uses the following main libraries:
 
 -   `Flask`: For the web framework.
 -   `yt-dlp`: For downloading video content.
--   `Flask-SocketIO`: For real-time communication (used for progress updates).
+-   **SSE (Server-Sent Events)**: For real-time progress updates (no extra dependencies).
 -   `ffmpeg`: For audio extraction and format conversion.
 
 The specific versions are listed in the `pyproject.toml` file.

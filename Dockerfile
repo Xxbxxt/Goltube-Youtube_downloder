@@ -1,26 +1,26 @@
 # ===== Gol tube — Dockerfile =====
-FROM python:3.12-slim
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies: ffmpeg + build tools for yt-dlp
+# Install build deps + ffmpeg
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        && \
+    apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
+# Copy only dependency metadata first (better layer caching)
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e .
 
-# Copy application
-COPY . .
+# Copy application source (excludes .gitignore'd files via .dockerignore)
+COPY main.py .
+COPY static/ ./static/
+COPY Templates/ ./Templates/
 
 # Create downloads directory
 RUN mkdir -p /downloads
 
-# Volume for downloads (mount with -v /host/path:/downloads)
+# Volume for downloads
 VOLUME ["/downloads"]
 
 EXPOSE 5001
