@@ -14,3 +14,7 @@ ffmpeg/
 
 # User config (download path, settings)
 config.json
+
+# SQLite database
+history.db
+*.db

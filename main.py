@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_file, jsonify, Response
+from flask import Flask, render_template, request, send_file, send_from_directory, jsonify, Response
 from yt_dlp import YoutubeDL
 from urllib.parse import urlparse, parse_qs
 import os
@@ -11,6 +11,8 @@ import subprocess
 import sqlite3
 import datetime
 import shutil
+import secrets
+from functools import wraps
 
 # ===== Config file persistence =====
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,7 +21,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 def load_config():
     """Load configuration from config.json, returning defaults on failure."""
     default = {
-        'download_folder': os.path.expanduser('~/Downloads'),
+        'download_folder': os.environ.get('DOWNLOAD_DIR', '/downloads'),
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -58,6 +60,85 @@ _cancel_events = {}
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
+# ===== CSRF Protection =====
+_csrf_tokens = set()
+
+def generate_csrf_token():
+    token = secrets.token_hex(32)
+    _csrf_tokens.add(token)
+    return token
+
+def validate_csrf(token):
+    if token in _csrf_tokens:
+        _csrf_tokens.discard(token)
+        return True
+    return False
+
+def csrf_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.form.get('_csrf_token') or (request.json and request.json.get('_csrf_token'))
+        if not token or not validate_csrf(token):
+            return jsonify({'success': False, 'error': 'Invalid or missing CSRF token'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ===== Rate Limiting (in-memory) =====
+from collections import defaultdict
+import time
+
+_rate_limits = defaultdict(list)
+
+def rate_limit(max_requests=10, window_seconds=60):
+    """Decorator: max_requests per window_seconds per IP."""
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            ip = request.remote_addr or '127.0.0.1'
+            now = time.time()
+            window_start = now - window_seconds
+            _rate_limits[ip] = [t for t in _rate_limits[ip] if t > window_start]
+            if len(_rate_limits[ip]) >= max_requests:
+                return jsonify({
+                    'success': False,
+                    'error': f'Rate limit exceeded. Try again in {window_seconds}s.'
+                }), 429
+            _rate_limits[ip].append(now)
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
+def get_progress(task_id):
+    with _download_lock:
+        return download_progress.get(task_id, {})
+
+def set_progress(task_id, data):
+    with _download_lock:
+        download_progress[task_id] = data
+
+def update_progress(task_id, **kwargs):
+    with _download_lock:
+        if task_id in download_progress:
+            download_progress[task_id].update(kwargs)
+
+def del_progress(task_id):
+    with _download_lock:
+        if task_id in download_progress:
+            del download_progress[task_id]
+
+def get_cancel_event(task_id):
+    with _download_lock:
+        return _cancel_events.get(task_id)
+
+def set_cancel_event(task_id, event):
+    with _download_lock:
+        _cancel_events[task_id] = event
+
+def del_cancel_event(task_id):
+    with _download_lock:
+        del_cancel_event(task_id)
 
 def check_ffmpeg():
     """Check if FFmpeg is available and warn if not."""
@@ -184,6 +265,17 @@ def format_filesize(bytes_val):
         bytes_val /= 1024
     return f"{bytes_val:.1f} TB"
 
+
+_QUALITY_HEIGHTS = {
+    '144p': 144, '240p': 240, '360p': 360, '480p': 480,
+    '720p': 720, '1080p': 1080, '1440p': 1440, '2160p': 2160,
+    '4320p': 4320, 'best': 0, 'worst': 0,
+}
+
+def quality_to_height(q):
+    """Convert a quality string like '720p' to numeric height. Returns None on invalid."""
+    return _QUALITY_HEIGHTS.get(q)
+
 def format_duration(seconds):
     if not seconds:
         return "0:00"
@@ -214,6 +306,7 @@ def history():
     return render_template('history.html')
 
 @app.route('/preview', methods=['POST'])
+@rate_limit(max_requests=20, window_seconds=60)
 def preview():
     """
     Generates a preview of a YouTube video.
@@ -303,14 +396,14 @@ def preview():
 
 def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choice, is_playlist=False):
     # Check for cancellation before starting
-    cancel_event = _cancel_events.get(task_id)
+    cancel_event = get_cancel_event(task_id)
     if cancel_event and cancel_event.is_set():
-        download_progress[task_id]['status'] = 'cancelled'
+        update_progress(task_id, status='cancelled')
         return
 
     def progress_hook(d):
         # Check cancellation on every progress update
-        cancel_event = _cancel_events.get(task_id)
+        cancel_event = get_cancel_event(task_id)
         if cancel_event and cancel_event.is_set():
             raise Exception('Download cancelled by user')
         
@@ -318,22 +411,22 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
             percent_str = d.get('_percent_str', '0.0%').strip('%')
             try:
                 progress = float(percent_str)
-                download_progress[task_id].update({
-                    'progress': progress,
-                    'status': 'downloading',
-                    'speed': d.get('speed', 0),
-                    'eta': d.get('eta', 0),
-                    'downloaded_bytes': d.get('downloaded_bytes', 0),
-                    'total_bytes': d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0),
-                })
+                update_progress(task_id,
+                    progress=progress,
+                    status='downloading',
+                    speed=d.get('speed', 0),
+                    eta=d.get('eta', 0),
+                    downloaded_bytes=d.get('downloaded_bytes', 0),
+                    total_bytes=d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0),
+                )
                 if is_playlist and 'info_dict' in d:
                     video_title = d['info_dict'].get('title', '')
                     if video_title:
-                        download_progress[task_id]['current_title'] = video_title
+                        update_progress(task_id, current_title=video_title)
             except (ValueError, TypeError):
                 pass
         elif d['status'] == 'finished':
-            download_progress[task_id]['status'] = 'processing'
+            update_progress(task_id, status='processing')
 
     # Let yt-dlp handle playlist natively - it will download all videos in the playlist
     ydl_opts['progress_hooks'] = [progress_hook]
@@ -360,13 +453,13 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
                 if len(filenames) > 3:
                     display_name += f' (+{len(filenames)-3} more)'
 
-                download_progress[task_id].update({
-                    'status': 'finished',
-                    'filename': display_name,
-                    'progress': 100,
-                    'playlist_count': len(filenames),
-                    'filesize': total_size,
-                })
+                update_progress(task_id,
+                    status='finished',
+                    filename=display_name,
+                    progress=100,
+                    playlist_count=len(filenames),
+                    filesize=total_size,
+                )
                 logging.info(f"Playlist downloaded: {len(filenames)} videos")
 
                 save_to_history({
@@ -407,12 +500,12 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
                             filesize = os.path.getsize(candidate)
                             break
 
-                download_progress[task_id].update({
-                    'status': 'finished',
-                    'filename': filename,
-                    'progress': 100,
-                    'filesize': filesize,
-                })
+                update_progress(task_id,
+                    status='finished',
+                    filename=filename,
+                    progress=100,
+                    filesize=filesize,
+                )
                 logging.info(f"Downloaded: {filename} ({format_filesize(filesize)})")
 
                 save_to_history({
@@ -432,15 +525,15 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
     except Exception as e:
         err_msg = str(e)
         # Distinguish cancellation from real errors
-        cancel_event = _cancel_events.get(task_id)
+        cancel_event = get_cancel_event(task_id)
         is_cancelled = cancel_event and cancel_event.is_set()
         
         if is_cancelled:
             logging.info(f"Download cancelled by user for task {task_id}")
-            download_progress[task_id].update({'status': 'cancelled', 'progress': 0})
+            update_progress(task_id, status='cancelled', progress=0)
         else:
             logging.error(f"Error in download thread for task {task_id}: {e}")
-            download_progress[task_id].update({'status': 'error', 'error': err_msg})
+            update_progress(task_id, status='error', error=err_msg)
             save_to_history({
                 'url': url,
                 'title': 'Download failed',
@@ -457,10 +550,16 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
             })
     finally:
         # Clean up cancel event
-        if task_id in _cancel_events:
-            del _cancel_events[task_id]
+        del_cancel_event(task_id)
+
+
+@app.route('/csrf_token')
+def csrf_token():
+    return jsonify({'token': generate_csrf_token()})
 
 @app.route('/download', methods=['POST'])
+@rate_limit(max_requests=5, window_seconds=60)
+@csrf_required
 def download_video():
     """
     Initiates a YouTube video download in a background thread and returns a task ID.
@@ -533,28 +632,33 @@ def download_video():
         })
     else:
         # Configure options for video downloads
-        format_string = f'bestvideo[ext={format_choice}][height<={quality_choice[:-1]}]+bestaudio/best[ext={format_choice}]/best'
+        # Use quality_to_height to safely parse quality strings
+        height = quality_to_height(quality_choice)
         if quality_choice == 'best':
             format_string = f'bestvideo[ext={format_choice}]+bestaudio/best[ext={format_choice}]/best'
         elif quality_choice == 'worst':
             format_string = f'worstvideo[ext={format_choice}]+worstaudio/best[ext={format_choice}]/worst'
+        elif height:
+            format_string = f'bestvideo[ext={format_choice}][height<={height}]+bestaudio/best[ext={format_choice}]/best'
+        else:
+            format_string = f'bestvideo[ext={format_choice}]+bestaudio/best[ext={format_choice}]/best'
         
         ydl_opts['format'] = format_string
 
     # Generate a unique task ID
     task_id = str(uuid.uuid4())
-    _cancel_events[task_id] = threading.Event()
+    set_cancel_event(task_id, threading.Event())
     
     if is_playlist:
-        download_progress[task_id] = {
-            'progress': 0, 
+        set_progress(task_id, {
+            'progress': 0,
             'status': 'starting',
             'playlist': True,
             'title': 'Playlist'
-        }
+        })
         logging.info("Will download playlist using yt-dlp natively")
     else:
-        download_progress[task_id] = {'progress': 0, 'status': 'starting'}
+        set_progress(task_id, {'progress': 0, 'status': 'starting'})
 
     # Start the download in a background thread
     thread = threading.Thread(
@@ -570,41 +674,52 @@ def download_video():
 def progress(task_id):
     """
     Server-Sent Events endpoint to stream download progress.
+    Uses a max-iteration guard to prevent infinite loops on lost tasks.
     """
     def generate():
-        while True:
-            progress_data = download_progress.get(task_id, {})
+        max_iterations = 6000  # ~50 minutes at 500ms per tick
+        for _ in range(max_iterations):
+            progress_data = get_progress(task_id)
             # SSE format: "data: <json_string>\n\n"
             yield f"data: {json.dumps(progress_data)}\n\n"
 
             if progress_data.get('status') in ['finished', 'error', 'cancelled']:
                 # Clean up the task entry after sending the final status
-                if task_id in download_progress:
-                    del download_progress[task_id]
+                del_progress(task_id)
                 break
             
             time.sleep(0.5) # Send updates every 500ms
 
     return Response(generate(), mimetype='text/event-stream')
 
-@app.route('/downloads/<filename>')
+@app.route('/downloads/<path:filename>')
 def download_file(filename):
     """
-    Serves a downloaded file to the user.
+    Serves a downloaded file to the user. Uses send_from_directory to prevent path traversal.
     """
-    return send_file(os.path.join(DOWNLOAD_FOLDER, filename), as_attachment=True)
+    return send_from_directory(DOWNLOAD_FOLDER, filename, as_attachment=True)
 
 @app.route('/set_download_dir', methods=['POST'])
+@csrf_required
 def set_download_dir():
     """
-    Sets the download directory.
+    Sets the download directory. Constrained to user's home directory.
     """
     global DOWNLOAD_FOLDER, config
     dir_path = request.form.get('dir', '').strip()
     if not dir_path:
-        DOWNLOAD_FOLDER = os.path.expanduser('~/Downloads')
-    else:
-        DOWNLOAD_FOLDER = dir_path
+        dir_path = os.path.expanduser('~/Downloads')
+    
+    abs_path = os.path.abspath(dir_path)
+    home_base = os.path.abspath(os.path.expanduser('~'))
+    
+    if not abs_path.startswith(home_base):
+        return jsonify({
+            'success': False, 
+            'error': 'Download path must be within your home directory'
+        }), 400
+    
+    DOWNLOAD_FOLDER = dir_path
     if not os.path.exists(DOWNLOAD_FOLDER):
         os.makedirs(DOWNLOAD_FOLDER)
     # Persist to config file
@@ -615,12 +730,12 @@ def set_download_dir():
 @app.route('/cancel/<task_id>', methods=['POST'])
 def cancel_download(task_id):
     """Cancel an active download."""
-    cancel_event = _cancel_events.get(task_id)
+    cancel_event = get_cancel_event(task_id)
     if cancel_event:
         cancel_event.set()
         return jsonify({'success': True, 'message': 'Cancellation requested'})
     # If task_id is not in cancel_events but still in progress, it might have already finished
-    progress_data = download_progress.get(task_id, {})
+    progress_data = get_progress(task_id)
     if progress_data.get('status') in ['finished', 'error', 'cancelled']:
         return jsonify({'success': False, 'error': 'Download already completed or finished'}), 400
     return jsonify({'success': False, 'error': 'Task not found'}), 404
