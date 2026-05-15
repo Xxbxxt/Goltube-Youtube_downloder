@@ -84,6 +84,11 @@ def csrf_required(f):
 
 
 # ===== Rate Limiting (in-memory) =====
+# Note: Both CSRF tokens and rate limits use in-memory dicts.
+# This is fine for single-process dev, but will NOT work behind
+# multiple gunicorn workers (each worker has its own dict).
+# Stale entries may accumulate on long-running processes.
+# For production, replace with Redis or similar shared store.
 from collections import defaultdict
 import time
 
@@ -302,11 +307,11 @@ def index():
     """
     Renders the main page of the application.
     """
-    return render_template('index.html')
+    return render_template('index.html', csrf_token=generate_csrf_token())
 
 @app.route('/history')
 def history():
-    return render_template('history.html')
+    return render_template('history.html', csrf_token=generate_csrf_token())
 
 @app.route('/preview', methods=['POST'])
 @rate_limit(max_requests=20, window_seconds=60)
@@ -579,10 +584,6 @@ def run_download(task_id, url, ydl_opts, audio_only, format_choice, quality_choi
         # Clean up cancel event
         del_cancel_event(task_id)
 
-
-@app.route('/csrf_token')
-def csrf_token():
-    return jsonify({'token': generate_csrf_token()})
 
 @app.route('/download', methods=['POST'])
 @rate_limit(max_requests=5, window_seconds=60)

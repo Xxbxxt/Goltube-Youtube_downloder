@@ -87,6 +87,7 @@
                 <label for="audio_only">Audio Only</label>
                 <input type="checkbox" id="audio_only" name="audio_only" value="yes">
                 <input type="hidden" id="hiddenUrl" name="url">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <button type="button" onclick="downloadVideo()">Start Download</button>
             </form>
         </div>
@@ -434,10 +435,12 @@
 
     function saveSettings() {
         var dir = document.getElementById('downloadDir').value;
+        var csrf = document.querySelector('input[name="_csrf_token"]');
+        if (!csrf) return showToast('Missing CSRF token', 'error');
         fetch('/set_download_dir', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'dir=' + encodeURIComponent(dir)
+            body: 'dir=' + encodeURIComponent(dir) + '&_csrf_token=' + encodeURIComponent(csrf.value)
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {

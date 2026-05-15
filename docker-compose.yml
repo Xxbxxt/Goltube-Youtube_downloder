@@ -7,7 +7,12 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ./downloads:/downloads
-      - ./config.json:/app/config.json
-      - ./history.db:/app/history.db
+      # Mount the whole project dir so config.json and history.db persist
+      # on the host (config.json is created by the app on first run)
+      - .:/app
+      # Separate named volume for actual downloads (large files)
+      - downloads:/downloads
     restart: unless-stopped
+
+volumes:
+  downloads:
