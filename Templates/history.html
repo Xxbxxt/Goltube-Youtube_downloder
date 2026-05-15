@@ -4,14 +4,261 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="static/style.css">
-    <title>History</title>
+    <title>Gol tube - History</title>
 </head>
 <body>
-  <div class="hero">
-    <h1>Your download</h1>
-    <p>Erm...</p>
-  </div>
+    <header>
+        <nav>
+            <a href="/"><span id="logo">Gol tube</span></a>
+            <div class="pages">
+                <a href="/"><button>Home</button></a>
+                <a href="/history"><button class="active-page">History</button></a>
+            </div>
+        </nav>
+        <div class="settings-dropdown">
+            <label for="settings">Settings</label>
+            <select name="Settings" id="settings" onchange="handleSettings(this.value);">
+                <option value="">Select</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+            </select>
+        </div>
+    </header>
 
+    <main>
+        <div class="hero">
+            <h1>Download History</h1>
+            <p>All your past downloads in one place.</p>
+        </div>
 
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-card">
+                <span class="stat-number" id="statTotal">0</span>
+                <span class="stat-label">Downloads</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="statSize">0 B</span>
+                <span class="stat-label">Total Size</span>
+            </div>
+        </div>
+
+        <!-- Search & Controls -->
+        <div class="history-controls">
+            <div class="search-wrapper">
+                <input type="text" id="historySearch" placeholder="Search by title or URL..." class="search-input">
+            </div>
+            <button class="btn-danger" id="clearAllBtn" onclick="clearHistory()">Clear All</button>
+        </div>
+
+        <!-- Loading -->
+        <div id="historyLoading" class="loading-state">
+            <div class="loader"></div>
+            <p>Loading history...</p>
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="empty-state" style="display: none;">
+            <div class="empty-icon">📂</div>
+            <h3>No downloads yet</h3>
+            <p>Your completed downloads will appear here.</p>
+            <a href="/"><button>Go Download Something</button></a>
+        </div>
+
+        <!-- Error State -->
+        <div id="historyError" class="empty-state" style="display: none;">
+            <div class="empty-icon">⚠️</div>
+            <h3>Failed to load history</h3>
+            <p id="historyErrorText">An error occurred.</p>
+            <button onclick="loadHistory()">Retry</button>
+        </div>
+
+        <!-- History List -->
+        <div id="historyList" class="history-list" style="display: none;"></div>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 Gol tube. All rights reserved.</p>
+    </footer>
+
+    <!-- Toast container -->
+    <div id="toastContainer" class="toast-container"></div>
 </body>
 </html>
+
+<script>
+    let currentSearch = '';
+
+    // ===== Theme =====
+    function handleSettings(value) {
+        if (value === 'light') setTheme('light');
+        else if (value === 'dark') setTheme('dark');
+        document.getElementById('settings').value = '';
+    }
+
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('goltube-theme', theme);
+        showToast(`Theme set to ${theme}`);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const saved = localStorage.getItem('goltube-theme');
+        if (saved) document.documentElement.setAttribute('data-theme', saved);
+        loadHistory();
+        loadStats();
+
+        // Search with debounce
+        let searchTimer;
+        document.getElementById('historySearch').addEventListener('input', function() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => {
+                currentSearch = this.value.trim();
+                loadHistory();
+            }, 300);
+        });
+    });
+
+    // ===== Toast notifications =====
+    function showToast(message, type) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (type ? ' toast-' + type : '');
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => { toast.classList.add('toast-show'); }, 10);
+        setTimeout(() => {
+            toast.classList.remove('toast-show');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    // ===== Stats =====
+    function loadStats() {
+        fetch('/api/history/stats')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('statTotal').textContent = data.total_downloads;
+                document.getElementById('statSize').textContent = data.total_size_formatted;
+            })
+            .catch(() => {});
+    }
+
+    // ===== History list =====
+    function loadHistory() {
+        const listEl = document.getElementById('historyList');
+        const loadingEl = document.getElementById('historyLoading');
+        const emptyEl = document.getElementById('emptyState');
+        const errorEl = document.getElementById('historyError');
+
+        loadingEl.style.display = 'block';
+        listEl.style.display = 'none';
+        emptyEl.style.display = 'none';
+        errorEl.style.display = 'none';
+
+        const params = new URLSearchParams({ limit: 100 });
+        if (currentSearch) params.set('search', currentSearch);
+
+        fetch('/api/history?' + params.toString())
+            .then(r => r.json())
+            .then(data => {
+                loadingEl.style.display = 'none';
+                if (data.data.length === 0) {
+                    emptyEl.style.display = 'block';
+                    return;
+                }
+                listEl.style.display = 'block';
+                renderHistory(data.data, listEl);
+            })
+            .catch(err => {
+                loadingEl.style.display = 'none';
+                document.getElementById('historyErrorText').textContent = err.message;
+                errorEl.style.display = 'block';
+            });
+    }
+
+    function renderHistory(entries, container) {
+        container.innerHTML = entries.map(entry => `
+            <div class="history-item">
+                <div class="history-thumb">
+                    ${entry.thumbnail ? `<img src="${entry.thumbnail}" alt="">` : `<div class="history-thumb-placeholder">🎬</div>`}
+                </div>
+                <div class="history-info">
+                    <div class="history-title">${escapeHtml(entry.title || 'Unknown')}</div>
+                    <div class="history-meta">
+                        <span>${entry.format?.toUpperCase() || 'N/A'}</span>
+                        ${entry.quality && entry.quality !== 'best' ? `<span>${entry.quality}</span>` : ''}
+                        ${entry.audio_only ? '<span class="badge-audio">Audio</span>' : ''}
+                        <span>${formatSize(entry.filesize)}</span>
+                        <span>${entry.created_at || ''}</span>
+                        ${entry.is_playlist ? `<span class="badge-playlist">Playlist (${entry.playlist_count})</span>` : ''}
+                    </div>
+                    ${entry.status && entry.status.startsWith('error') ? `<div class="history-error">❌ ${escapeHtml(entry.status)}</div>` : ''}
+                </div>
+                <div class="history-actions">
+                    ${!entry.status?.startsWith('error') ? `
+                        <button onclick="downloadFile('${escapeHtml(entry.filename)}')" title="Download file">⬇</button>
+                    ` : ''}
+                    <button onclick="deleteEntry(${entry.id})" class="btn-icon-danger" title="Delete">🗑</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function downloadFile(filename) {
+        if (!filename) return;
+        const a = document.createElement('a');
+        a.href = '/downloads/' + encodeURIComponent(filename);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+
+    function deleteEntry(id) {
+        if (!confirm('Delete this history entry?')) return;
+        fetch('/api/history/' + id, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('Entry deleted');
+                    loadHistory();
+                    loadStats();
+                }
+            })
+            .catch(() => showToast('Failed to delete', 'error'));
+    }
+
+    function clearHistory() {
+        if (!confirm('Delete ALL download history? This cannot be undone.')) return;
+        fetch('/api/history/clear', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast('History cleared');
+                    loadHistory();
+                    loadStats();
+                }
+            })
+            .catch(() => showToast('Failed to clear history', 'error'));
+    }
+
+    // ===== Helpers =====
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function formatSize(bytes) {
+        if (!bytes || bytes === 0) return 'Unknown';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        let size = bytes;
+        while (size >= 1024 && i < units.length - 1) {
+            size /= 1024;
+            i++;
+        }
+        return size.toFixed(1) + ' ' + units[i];
+    }
+</script>

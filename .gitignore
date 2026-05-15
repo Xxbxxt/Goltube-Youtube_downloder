@@ -11,3 +11,6 @@ wheels/
 
 downloads/
 ffmpeg/
+
+# User config (download path, settings)
+config.json

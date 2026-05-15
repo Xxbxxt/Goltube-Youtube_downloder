@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  gol-tube:
+    build: .
+    container_name: gol-tube
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./downloads:/downloads
+      - ./config.json:/app/config.json
+      - ./history.db:/app/history.db
+    restart: unless-stopped
